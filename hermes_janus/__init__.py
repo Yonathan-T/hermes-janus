@@ -302,65 +302,86 @@ def _handle_slash(raw_args: str) -> str:
 # Autonomous AI Tools
 # -----------------------------------------------------------------------------
 
-def tool_janus_checkpoint(message: str) -> str:
+def tool_janus_checkpoint(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """Create a named checkpoint of the workspace."""
+    args = args or {}
+    message = args.get("message", "Agent checkpoint")
     engine = get_engine()
     commit = engine.snapshot(message=message, author="agent")
     return f"Created checkpoint [{commit.sha[:7]}] on branch '{commit.branch}'."
 
 
-def tool_janus_rewind(steps: int = 1, sha: Optional[str] = None) -> str:
+def tool_janus_rewind(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """Rewind workspace to previous state (steps back or commit sha)."""
+    args = args or {}
     engine = get_engine()
-    target = sha if sha else steps
+    target = args.get("sha") or args.get("steps", 1)
+    if isinstance(target, str) and target.isdigit():
+        target = int(target)
     success, msg = engine.rewind(target)
     return msg
 
 
-def tool_janus_branch(branch_name: str) -> str:
+def tool_janus_branch(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """Fork timeline to explore an alternative hypothesis or implementation."""
+    args = args or {}
+    branch_name = args.get("branch_name", "experiment")
     engine = get_engine()
     success, msg = engine.branch(branch_name)
     return msg
 
 
-def tool_janus_timeline() -> str:
+def tool_janus_timeline(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """Inspect timeline and past execution branches."""
     engine = get_engine()
     return engine.dag.render_timeline_ascii(limit=10)
 
 
-def tool_janus_diff() -> str:
+def tool_janus_diff(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """View file differences between current state and previous commit."""
     engine = get_engine()
     return engine.diff()
 
 
-def tool_janus_merge(branch_name: str) -> str:
+def tool_janus_merge(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     """Merge successful branch back into current branch."""
+    args = args or {}
+    branch_name = args.get("branch_name", "")
+    if not branch_name:
+        return "Error: branch_name is required for merge."
     engine = get_engine()
     success, msg = engine.merge(branch_name)
     return msg
 
 
-# Tool schemas for Hermes Agent
+# Tool schemas conforming to standard Hermes function calling format
 _TOOL_DEFINITIONS = [
     (
         "janus_checkpoint",
         {
-            "type": "object",
-            "properties": {"message": {"type": "string", "description": "Reason for checkpoint"}},
-            "required": ["message"],
+            "name": "janus_checkpoint",
+            "description": "Create a named checkpoint of the workspace to establish a restore point.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Reason for checkpoint"}
+                },
+                "required": ["message"],
+            },
         },
         tool_janus_checkpoint,
     ),
     (
         "janus_rewind",
         {
-            "type": "object",
-            "properties": {
-                "steps": {"type": "integer", "description": "Number of commits to rewind", "default": 1},
-                "sha": {"type": "string", "description": "Specific commit SHA to restore (optional)"},
+            "name": "janus_rewind",
+            "description": "Roll back workspace state by N steps or to a specific commit SHA.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {"type": "integer", "description": "Number of commits to roll back (default 1)"},
+                    "sha": {"type": "string", "description": "Specific commit SHA to restore (optional)"},
+                },
             },
         },
         tool_janus_rewind,
@@ -368,28 +389,54 @@ _TOOL_DEFINITIONS = [
     (
         "janus_branch",
         {
-            "type": "object",
-            "properties": {"branch_name": {"type": "string", "description": "Name of the branch to create/checkout"}},
-            "required": ["branch_name"],
+            "name": "janus_branch",
+            "description": "Fork timeline into an isolated exploration branch to test hypotheses safely.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "branch_name": {"type": "string", "description": "Name of the branch to create/checkout"}
+                },
+                "required": ["branch_name"],
+            },
         },
         tool_janus_branch,
     ),
     (
         "janus_timeline",
-        {"type": "object", "properties": {}},
+        {
+            "name": "janus_timeline",
+            "description": "Inspect the visual ASCII timeline and past execution branches.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
         tool_janus_timeline,
     ),
     (
         "janus_diff",
-        {"type": "object", "properties": {}},
+        {
+            "name": "janus_diff",
+            "description": "View file differences between current workspace state and prior checkpoint.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
         tool_janus_diff,
     ),
     (
         "janus_merge",
         {
-            "type": "object",
-            "properties": {"branch_name": {"type": "string", "description": "Branch to merge into current"}},
-            "required": ["branch_name"],
+            "name": "janus_merge",
+            "description": "Three-way merge a verified exploration branch back into the current branch.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "branch_name": {"type": "string", "description": "Branch to merge into current"}
+                },
+                "required": ["branch_name"],
+            },
         },
         tool_janus_merge,
     ),
