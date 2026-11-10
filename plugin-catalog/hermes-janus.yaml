@@ -1,0 +1,25 @@
+name: hermes-janus
+version: "1.0.0"
+repo: https://github.com/Yonathan-T/hermes-janus
+sha: 00dd94cebc26c80e0c596c0626af1b3035372b2b
+description: "Bi-directional temporal state engine & MVCC workspace for Hermes Agent. Zero-copy Content-Addressable Storage (CAS), Write-Ahead Logging (WAL), Merkle-DAG execution branching, instant rollback, and Mark-and-Sweep garbage collection."
+maintainer: Yonathan-T
+tier: community
+category: tools
+requires_hermes: ">=0.20.0"
+docs_url: https://github.com/Yonathan-T/hermes-janus#readme
+capabilities:
+  provides_tools:
+    - janus_checkpoint
+    - janus_rewind
+    - janus_branch
+    - janus_timeline
+    - janus_diff
+    - janus_merge
+    - janus_gc
+  provides_hooks:
+    - pre_tool_call
+    - post_tool_call
+    - on_session_end
+  provides_middleware: []
+  requires_env: []

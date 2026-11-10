@@ -77,7 +77,8 @@ Every autonomous AI coding agent suffers from **destructive agent drift**:
 | `/janus branch [name]` | Forks or switches to an execution branch. |
 | `/janus diff [sha_a] [sha_b]` | Shows a unified diff between commits or against current files. |
 | `/janus merge <branch>` | Performs a 3-way merge from an exploration branch into current. |
-| `/janus status` | Displays active branch, HEAD commit, and tracked file count. |
+| `/janus status` | Displays active branch, HEAD commit, tracked files, and disk storage usage. |
+| `/janus gc` | Runs Mark-and-Sweep garbage collection on stale blobs and compacts the WAL. |
 
 ### Autonomous Agent Tools
 
@@ -88,6 +89,7 @@ Hermes can autonomously use Janus tools during complex tasks:
 * `janus_timeline`: Inspect past states and decision history.
 * `janus_diff`: Review changes made during a task.
 * `janus_merge`: Merge successful branch fixes.
+* `janus_gc`: Sweep unreferenced blobs and prune stale commit history to keep workspace overhead minimal.
 
 ---
 
@@ -114,7 +116,7 @@ Hermes can autonomously use Janus tools during complex tasks:
 
 Run the automated test suite:
 ```bash
-python tests/test_janus_unittest.py
+python -m unittest discover -s tests
 ```
 
 Run official Hermes Agent plugin validation:
