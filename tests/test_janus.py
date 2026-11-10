@@ -73,6 +73,30 @@ class TestJanus(unittest.TestCase):
         self.assertTrue(success)
         self.assertTrue(f2.exists())
 
+    def test_garbage_collection(self):
+        engine = JanusEngine(self.temp_dir)
+        f = self.temp_dir / "data.txt"
+        f.write_text("initial content")
+        engine.snapshot("initial")
+
+        # Generate a blob that will be overwritten
+        f.write_text("intermediate content to prune")
+        engine.snapshot("temp")
+
+        f.write_text("final content")
+        engine.snapshot("final")
+
+        info_before = engine.storage_info()
+        self.assertGreater(info_before["total_bytes"], 0)
+        self.assertGreaterEqual(info_before["blob_count"], 3)
+
+        # Run GC with max_history=1 to prune older commits
+        gc_result = engine.gc(max_history=1)
+        self.assertGreater(gc_result["commits_pruned"], 0)
+
+        info_after = engine.storage_info()
+        self.assertLessEqual(info_after["commit_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

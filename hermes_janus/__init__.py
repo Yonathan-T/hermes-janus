@@ -154,6 +154,9 @@ def _on_session_end(session_id: str = "", **kwargs: Any) -> None:
     pending = engine.wal.get_pending_transactions()
     if pending:
         logger.warning("[janus] Found %d uncommitted WAL transactions at session end.", len(pending))
+    info = engine.storage_info()
+    if info["total_bytes"] > 50 * 1024 * 1024 or info["commit_count"] > 100:
+        engine.gc()
 
 
 def _cmd_timeline(argv: List[str]) -> str:
@@ -234,12 +237,28 @@ def _cmd_status(argv: List[str]) -> str:
     short_head = head[:7] if head else "none"
     commit = engine.dag.get_commit(head) if head else None
     tracked_count = len(commit.manifest) if commit else 0
+    info = engine.storage_info()
+    mb = info["total_bytes"] / (1024 * 1024)
     return (
         f"[hermes-janus v1.0.0]\n"
         f"  Workspace: {engine.workspace_dir}\n"
         f"  Current Branch: {branch}\n"
         f"  HEAD: [{short_head}]\n"
-        f"  Tracked Files: {tracked_count}"
+        f"  Tracked Files: {tracked_count}\n"
+        f"  Storage: {mb:.2f} MB ({info['blob_count']} CAS blobs, {info['commit_count']} commits)"
+    )
+
+
+def _cmd_gc(argv: List[str]) -> str:
+    engine = get_engine()
+    result = engine.gc()
+    freed_kb = result["bytes_freed"] / 1024
+    return (
+        f"[janus] Garbage collection complete:\n"
+        f"  Pruned commits: {result['commits_pruned']}\n"
+        f"  Removed blobs:  {result['blobs_removed']}\n"
+        f"  Reclaimed:      {freed_kb:.1f} KB\n"
+        f"  WAL compacted:  {result['wal_compacted']}"
     )
 
 
@@ -252,6 +271,7 @@ _COMMANDS: Dict[str, Callable[[List[str]], str]] = {
     "merge": _cmd_merge,
     "status": _cmd_status,
     "workspace": _cmd_workspace,
+    "gc": _cmd_gc,
 }
 
 _HELP = """Hermes-Janus: Bi-directional temporal state engine & MVCC workspace
@@ -263,8 +283,9 @@ Subcommands:
   /janus branch [name]         Create or switch to an execution branch
   /janus diff [sha_a] [sha_b]  Show changes between commits or current workspace
   /janus merge <branch>        Three-way merge an exploration branch
-  /janus status                Display current branch, HEAD, and tracked files
+  /janus status                Display branch, HEAD, tracked files, and disk usage
   /janus workspace [path]      Show or set the active workspace directory
+  /janus gc                    Run Mark-and-Sweep garbage collection on stale blobs
 """
 
 
@@ -328,6 +349,13 @@ def tool_janus_merge(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     engine = get_engine()
     success, msg = engine.merge(branch_name)
     return msg
+
+
+def tool_janus_gc(args: Dict[str, Any] = None, **kwargs: Any) -> str:
+    engine = get_engine()
+    result = engine.gc()
+    freed_kb = result["bytes_freed"] / 1024
+    return f"GC complete: pruned {result['commits_pruned']} old commits, removed {result['blobs_removed']} unreferenced blobs, freed {freed_kb:.1f} KB."
 
 
 _TOOL_DEFINITIONS = [
@@ -414,6 +442,18 @@ _TOOL_DEFINITIONS = [
             },
         },
         tool_janus_merge,
+    ),
+    (
+        "janus_gc",
+        {
+            "name": "janus_gc",
+            "description": "Trigger Mark-and-Sweep garbage collection to purge unreferenced CAS blobs and compact WAL.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        tool_janus_gc,
     ),
 ]
 

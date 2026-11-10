@@ -91,3 +91,31 @@ class ContentAddressableStorage:
         dest = Path(destination_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(blob_path, dest)
+
+    def prune_unreferenced(self, referenced_hashes: set[str]) -> Tuple[int, int]:
+        """Sweep and delete any blob not in referenced_hashes. Returns (blobs_removed, bytes_freed)."""
+        removed = 0
+        bytes_freed = 0
+        if not self.objects_dir.exists():
+            return 0, 0
+
+        for prefix_dir in list(self.objects_dir.iterdir()):
+            if not prefix_dir.is_dir():
+                continue
+            for blob_file in list(prefix_dir.iterdir()):
+                if not blob_file.is_file():
+                    continue
+                blob_hash = prefix_dir.name + blob_file.name
+                if blob_hash not in referenced_hashes:
+                    try:
+                        bytes_freed += blob_file.stat().st_size
+                        blob_file.unlink()
+                        removed += 1
+                    except Exception:
+                        pass
+            try:
+                if not any(prefix_dir.iterdir()):
+                    prefix_dir.rmdir()
+            except Exception:
+                pass
+        return removed, bytes_freed

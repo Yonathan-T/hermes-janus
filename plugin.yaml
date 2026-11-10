@@ -14,3 +14,4 @@ provides_tools:
   - janus_timeline
   - janus_diff
   - janus_merge
+  - janus_gc

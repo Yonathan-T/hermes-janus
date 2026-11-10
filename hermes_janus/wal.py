@@ -119,3 +119,27 @@ class WriteAheadLog:
             elif entry.state in ("COMMITTED", "ABORTED"):
                 tx_states.pop(entry.tx_id, None)
         return list(tx_states.values())
+
+    def compact(self, keep_last: int = 20) -> int:
+        """Compact WAL log by discarding old finalized entries while preserving pending transactions."""
+        entries = self.read_entries()
+        pending = self.get_pending_transactions()
+        pending_ids = {e.tx_id for e in pending}
+
+        # Keep all pending entries and the last N entries
+        keep_entries = []
+        for e in entries:
+            if e.tx_id in pending_ids:
+                keep_entries.append(e)
+
+        tail = entries[-keep_last:] if len(entries) > keep_last else entries
+        for e in tail:
+            if e not in keep_entries:
+                keep_entries.append(e)
+
+        pruned = len(entries) - len(keep_entries)
+        if pruned > 0:
+            with open(self.wal_file, "w", encoding="utf-8") as f:
+                for e in keep_entries:
+                    f.write(e.to_json() + "\n")
+        return pruned

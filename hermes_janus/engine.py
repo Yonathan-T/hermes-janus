@@ -355,3 +355,37 @@ class JanusEngine:
             author="janus",
         )
         return True, f"Successfully merged '{source_branch}' into '{current_branch}' [{merge_commit.sha[:7]}]."
+
+    def storage_info(self) -> Dict[str, Any]:
+        """Calculate total disk space utilized by Janus CAS blobs, WAL, and commits."""
+        total_bytes = 0
+        blob_count = 0
+        if self.cas.objects_dir.exists():
+            for p in self.cas.objects_dir.rglob("*"):
+                if p.is_file():
+                    total_bytes += p.stat().st_size
+                    blob_count += 1
+
+        wal_bytes = self.wal.wal_file.stat().st_size if self.wal.wal_file.exists() else 0
+        commit_count = len(list(self.dag.commits_dir.glob("*.json")))
+
+        return {
+            "total_bytes": total_bytes + wal_bytes,
+            "blob_count": blob_count,
+            "commit_count": commit_count,
+            "wal_bytes": wal_bytes,
+        }
+
+    def gc(self, max_history: int = 50) -> Dict[str, Any]:
+        """Perform Mark-and-Sweep garbage collection, pruning stale commits and unreferenced blobs."""
+        commits_pruned = self.dag.prune_old_commits(max_history=max_history)
+        referenced_blobs = self.dag.get_all_referenced_blobs()
+        blobs_removed, bytes_freed = self.cas.prune_unreferenced(referenced_blobs)
+        wal_compacted = self.wal.compact()
+
+        return {
+            "commits_pruned": commits_pruned,
+            "blobs_removed": blobs_removed,
+            "bytes_freed": bytes_freed,
+            "wal_compacted": wal_compacted,
+        }

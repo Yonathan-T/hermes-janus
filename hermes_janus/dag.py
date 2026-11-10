@@ -222,3 +222,39 @@ class MerkleDag:
                 lines.append("  │")
 
         return "\n".join(lines)
+
+    def get_all_referenced_blobs(self) -> Set[str]:
+        """Collect all blob hashes currently referenced across all surviving commits."""
+        referenced: Set[str] = set()
+        for commit_file in self.commits_dir.glob("*.json"):
+            try:
+                commit = JanusCommit.from_json(commit_file.read_text(encoding="utf-8"))
+                referenced.update(commit.manifest.values())
+            except Exception:
+                pass
+        return referenced
+
+    def prune_old_commits(self, max_history: int = 50) -> int:
+        """Prune commits older than max_history per branch line."""
+        surviving_commits: Set[str] = set()
+        for branch in self.list_branches():
+            curr = self.get_branch_sha(branch)
+            depth = 0
+            while curr and depth < max_history:
+                surviving_commits.add(curr)
+                commit = self.get_commit(curr)
+                if not commit:
+                    break
+                curr = commit.parent_sha
+                depth += 1
+
+        pruned = 0
+        for commit_file in self.commits_dir.glob("*.json"):
+            sha = commit_file.stem
+            if sha not in surviving_commits:
+                try:
+                    commit_file.unlink()
+                    pruned += 1
+                except Exception:
+                    pass
+        return pruned
