@@ -10,6 +10,8 @@ from __future__ import annotations
 import difflib
 import os
 import shutil
+import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -388,4 +390,82 @@ class JanusEngine:
             "blobs_removed": blobs_removed,
             "bytes_freed": bytes_freed,
             "wal_compacted": wal_compacted,
+        }
+
+    def tournament(
+        self,
+        candidate_branches: List[str],
+        test_command: str = "",
+        auto_merge: bool = True,
+    ) -> Dict[str, Any]:
+        """Evaluate multiple candidate execution branches (Leader Election / Tournament Selection).
+
+        Switches to each candidate branch, runs test_command (if provided), records execution
+        metrics (success, duration, output summary), elects a winning branch, and optionally
+        merges the winner back into the base branch.
+        """
+        initial_branch = self.dag.get_current_branch()
+        results: Dict[str, Dict[str, Any]] = {}
+        winner: Optional[str] = None
+        best_duration: float = float("inf")
+
+        for branch in candidate_branches:
+            branch = branch.strip()
+            if not branch:
+                continue
+
+            success, msg = self.branch(branch)
+            if not success:
+                results[branch] = {"passed": False, "duration": 0.0, "output": f"Failed to checkout: {msg}"}
+                continue
+
+            if test_command:
+                start = time.time()
+                try:
+                    proc = subprocess.run(
+                        test_command,
+                        shell=True,
+                        cwd=str(self.workspace_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    duration = time.time() - start
+                    passed = (proc.returncode == 0)
+                    out = (proc.stdout + "\n" + proc.stderr).strip()
+                    summary = out[-400:] if len(out) > 400 else out
+                except Exception as e:
+                    duration = time.time() - start
+                    passed = False
+                    summary = f"Test execution error: {str(e)}"
+            else:
+                passed = True
+                duration = 0.0
+                summary = "Loaded cleanly (no test command specified)"
+
+            results[branch] = {
+                "passed": passed,
+                "duration": round(duration, 3),
+                "output": summary,
+            }
+
+            if passed and duration < best_duration:
+                best_duration = duration
+                winner = branch
+
+        # Return to the base branch
+        self.branch(initial_branch)
+
+        merge_msg = ""
+        merged = False
+        if winner and auto_merge:
+            merged, merge_msg = self.merge(winner)
+
+        return {
+            "initial_branch": initial_branch,
+            "candidates": candidate_branches,
+            "results": results,
+            "winner": winner,
+            "merged": merged,
+            "merge_message": merge_msg,
         }

@@ -63,6 +63,9 @@ Every autonomous AI coding agent suffers from **destructive agent drift**:
 4. **Hypothesis Branching & 3-Way Merge:**  
    Hermes (or the user) can fork into isolated branches (e.g., `hypothesis-a` vs `hypothesis-b`), evaluate alternative implementations, and merge winning solutions back into `main`.
 
+5. **Tournament Selection & Multi-Agent Consensus (`janus_elect`):**  
+   Enables parallel exploration branches to compete through automated test suites or benchmarks. The engine runs evaluation commands in each branch in isolation, ranks results by pass rate and execution time, elects the winning candidate, and cleanly merges it into the base branch.
+
 ---
 
 ## 🚀 Features & Commands
@@ -77,6 +80,7 @@ Every autonomous AI coding agent suffers from **destructive agent drift**:
 | `/janus branch [name]` | Forks or switches to an execution branch. |
 | `/janus diff [sha_a] [sha_b]` | Shows a unified diff between commits or against current files. |
 | `/janus merge <branch>` | Performs a 3-way merge from an exploration branch into current. |
+| `/janus elect <b1> <b2> ...` | Runs tournament election across candidate branches and merges the winner. |
 | `/janus status` | Displays active branch, HEAD commit, tracked files, and disk storage usage. |
 | `/janus gc` | Runs Mark-and-Sweep garbage collection on stale blobs and compacts the WAL. |
 
@@ -89,6 +93,7 @@ Hermes can autonomously use Janus tools during complex tasks:
 * `janus_timeline`: Inspect past states and decision history.
 * `janus_diff`: Review changes made during a task.
 * `janus_merge`: Merge successful branch fixes.
+* `janus_elect`: Compete candidate implementation branches through automated tests or metrics and auto-merge the winner.
 * `janus_gc`: Sweep unreferenced blobs and prune stale commit history to keep workspace overhead minimal.
 
 ---

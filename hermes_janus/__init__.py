@@ -262,6 +262,34 @@ def _cmd_gc(argv: List[str]) -> str:
     )
 
 
+def _cmd_elect(argv: List[str]) -> str:
+    if len(argv) < 3:
+        return "[janus] Usage: /janus elect <branch_1> <branch_2> ... [--test <test_command>]"
+    branches: List[str] = []
+    test_cmd = ""
+    idx = 1
+    while idx < len(argv):
+        if argv[idx] in ("--test", "-t") and idx + 1 < len(argv):
+            test_cmd = " ".join(argv[idx + 1:])
+            break
+        branches.append(argv[idx])
+        idx += 1
+
+    engine = get_engine()
+    res = engine.tournament(branches, test_command=test_cmd, auto_merge=True)
+    lines = ["=== Janus Tournament Consensus ===", f"Candidates: {', '.join(branches)}"]
+    for b, r in res["results"].items():
+        status = "PASSED" if r["passed"] else "FAILED"
+        lines.append(f"  [{status}] '{b}': {r['duration']}s — {r['output'][:60]}")
+    if res["winner"]:
+        lines.append(f"\n★ Elected Winner: '{res['winner']}'")
+        if res["merged"]:
+            lines.append(f"  {res['merge_message']}")
+    else:
+        lines.append("\n✗ No candidate passed the evaluation criteria.")
+    return "\n".join(lines)
+
+
 _COMMANDS: Dict[str, Callable[[List[str]], str]] = {
     "timeline": _cmd_timeline,
     "checkpoint": _cmd_checkpoint,
@@ -272,6 +300,7 @@ _COMMANDS: Dict[str, Callable[[List[str]], str]] = {
     "status": _cmd_status,
     "workspace": _cmd_workspace,
     "gc": _cmd_gc,
+    "elect": _cmd_elect,
 }
 
 _HELP = """Hermes-Janus: Bi-directional temporal state engine & MVCC workspace
@@ -283,6 +312,7 @@ Subcommands:
   /janus branch [name]         Create or switch to an execution branch
   /janus diff [sha_a] [sha_b]  Show changes between commits or current workspace
   /janus merge <branch>        Three-way merge an exploration branch
+  /janus elect <b1> <b2> ...   Run tournament election between branches and merge the winner
   /janus status                Display branch, HEAD, tracked files, and disk usage
   /janus workspace [path]      Show or set the active workspace directory
   /janus gc                    Run Mark-and-Sweep garbage collection on stale blobs
@@ -356,6 +386,20 @@ def tool_janus_gc(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     result = engine.gc()
     freed_kb = result["bytes_freed"] / 1024
     return f"GC complete: pruned {result['commits_pruned']} old commits, removed {result['blobs_removed']} unreferenced blobs, freed {freed_kb:.1f} KB."
+
+
+def tool_janus_elect(args: Dict[str, Any] = None, **kwargs: Any) -> str:
+    args = args or {}
+    candidates = args.get("candidates", [])
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        return "Error: candidates must be a list with at least two branch names."
+    test_command = args.get("test_command", "")
+    auto_merge = args.get("auto_merge", True)
+    engine = get_engine()
+    res = engine.tournament(candidates, test_command=test_command, auto_merge=auto_merge)
+    if res["winner"]:
+        return f"Tournament complete. Winner elected: '{res['winner']}'. {res['merge_message']}"
+    return "Tournament complete. No candidate branch met the passing criteria."
 
 
 _TOOL_DEFINITIONS = [
@@ -454,6 +498,33 @@ _TOOL_DEFINITIONS = [
             },
         },
         tool_janus_gc,
+    ),
+    (
+        "janus_elect",
+        {
+            "name": "janus_elect",
+            "description": "Run tournament election across candidate branches to elect and merge the winning implementation based on tests or metrics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidates": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of branch names to evaluate",
+                    },
+                    "test_command": {
+                        "type": "string",
+                        "description": "Optional command to run for evaluating each branch (e.g. 'go test ./...' or 'pytest')",
+                    },
+                    "auto_merge": {
+                        "type": "boolean",
+                        "description": "Whether to merge the elected winner into the base branch (default true)",
+                    },
+                },
+                "required": ["candidates"],
+            },
+        },
+        tool_janus_elect,
     ),
 ]
 

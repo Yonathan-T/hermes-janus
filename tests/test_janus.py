@@ -97,6 +97,40 @@ class TestJanus(unittest.TestCase):
         info_after = engine.storage_info()
         self.assertLessEqual(info_after["commit_count"], 1)
 
+    def test_tournament_election(self):
+        engine = JanusEngine(self.temp_dir)
+        test_file = self.temp_dir / "calc.py"
+        test_file.write_text("def add(a, b): return 0\n")
+
+        harness = self.temp_dir / "test_calc.py"
+        harness.write_text("import calc\nassert calc.add(2, 3) == 5\n")
+        engine.snapshot("initial baseline with test harness")
+
+        # Candidate A: wrong implementation
+        engine.branch("candidate-a")
+        test_file.write_text("def add(a, b): return a - b\n")
+        engine.snapshot("candidate-a faulty minus")
+
+        # Candidate B: correct implementation
+        engine.branch("main")
+        engine.branch("candidate-b")
+        test_file.write_text("def add(a, b): return a + b\n")
+        engine.snapshot("candidate-b correct add")
+
+        # Switch back to main
+        engine.branch("main")
+
+        # Run election using test harness (-B prevents python bytecode caching)
+        res = engine.tournament(
+            ["candidate-a", "candidate-b"],
+            test_command=f'"{sys.executable}" -B test_calc.py',
+            auto_merge=True,
+        )
+
+        self.assertEqual(res["winner"], "candidate-b")
+        self.assertTrue(res["merged"])
+        self.assertIn("return a + b", test_file.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
