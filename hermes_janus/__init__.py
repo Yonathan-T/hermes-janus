@@ -15,17 +15,65 @@ from .engine import JanusEngine
 
 logger = logging.getLogger("hermes.plugins.janus")
 
-# Singleton engine instance per workspace
-_engine_instance: Optional[JanusEngine] = None
+# Cache engine instances per workspace directory
+_engines: Dict[str, JanusEngine] = {}
+_active_workspace: Optional[Path] = None
 _active_tx_id: Optional[str] = None
 
 
-def get_engine() -> JanusEngine:
-    global _engine_instance
-    if _engine_instance is None:
-        workspace = Path(os.environ.get("HERMES_WORKSPACE", os.getcwd()))
-        _engine_instance = JanusEngine(workspace)
-    return _engine_instance
+def _resolve_workspace() -> Path:
+    """Resolve the active workspace directory safely and dynamically."""
+    # 1. Hermes documented public API for agent/session working directory
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+        p = resolve_agent_cwd()
+        if p and p.is_dir():
+            is_hermes_install = (
+                p.name == "hermes-agent"
+                or (p / ".bytecode-fingerprint").exists()
+                or (p / "hermes_cli").is_dir()
+            )
+            if not is_hermes_install:
+                return p.resolve()
+    except Exception:
+        pass
+
+    # 2. Check environment variables passed by session / terminal
+    for env_var in ("TERMINAL_CWD", "HERMES_WORKSPACE", "HERMES_SESSION_CWD"):
+        val = os.environ.get(env_var)
+        if val and Path(val).is_dir():
+            return Path(val).resolve()
+
+    # 3. Fallback to process cwd
+    cwd = Path.cwd().resolve()
+    is_hermes_install = (
+        cwd.name == "hermes-agent"
+        or (cwd / ".bytecode-fingerprint").exists()
+        or (cwd / "hermes_cli").is_dir()
+    )
+    if is_hermes_install:
+        term_cwd = os.environ.get("TERMINAL_CWD")
+        if term_cwd and Path(term_cwd).is_dir():
+            return Path(term_cwd).resolve()
+
+    return cwd
+
+
+def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
+    """Retrieve or initialize the JanusEngine for the target or active workspace."""
+    global _active_workspace
+    if target:
+        target_path = Path(target).resolve()
+        _active_workspace = target_path
+    elif _active_workspace is not None:
+        target_path = _active_workspace
+    else:
+        target_path = _resolve_workspace()
+
+    key = str(target_path)
+    if key not in _engines:
+        _engines[key] = JanusEngine(target_path)
+    return _engines[key]
 
 
 # -----------------------------------------------------------------------------
@@ -34,6 +82,7 @@ def get_engine() -> JanusEngine:
 
 MUTATING_TOOLS = {
     "write_file",
+    "edit_file",
     "patch",
     "replace_in_file",
     "delete_file",
@@ -159,6 +208,26 @@ def _cmd_merge(argv: List[str]) -> str:
     return f"[janus] {msg}"
 
 
+def _cmd_workspace(argv: List[str]) -> str:
+    global _active_workspace
+    if len(argv) > 1:
+        target = Path(argv[1]).resolve()
+        if not target.is_dir():
+            return f"[janus] Error: Path '{target}' is not a directory."
+        _active_workspace = target
+        engine = get_engine(target)
+        head = engine.dag.get_head_sha()
+        commit = engine.dag.get_commit(head) if head else None
+        files_count = len(commit.manifest) if commit else 0
+        return f"[janus] Workspace set to: {target}\n  Current Branch: {engine.dag.get_current_branch()}\n  Tracked Files: {files_count}"
+
+    engine = get_engine()
+    return (
+        f"[janus] Active Workspace: {engine.workspace_dir}\n"
+        f"Usage: /janus workspace <path> to switch workspace explicitly."
+    )
+
+
 def _cmd_status(argv: List[str]) -> str:
     engine = get_engine()
     branch = engine.dag.get_current_branch()
@@ -183,6 +252,7 @@ _COMMANDS: Dict[str, Callable[[List[str]], str]] = {
     "diff": _cmd_diff,
     "merge": _cmd_merge,
     "status": _cmd_status,
+    "workspace": _cmd_workspace,
 }
 
 _HELP = """Hermes-Janus: Bi-directional temporal state engine & MVCC workspace
@@ -195,6 +265,7 @@ Subcommands:
   /janus diff [sha_a] [sha_b]  Show changes between commits or current workspace
   /janus merge <branch>        Three-way merge an exploration branch
   /janus status                Display current branch, HEAD, and tracked files
+  /janus workspace [path]      Show or set the active workspace directory
 """
 
 
