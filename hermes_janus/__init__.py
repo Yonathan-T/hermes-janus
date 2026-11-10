@@ -164,13 +164,14 @@ def _cmd_status(argv: List[str]) -> str:
     branch = engine.dag.get_current_branch()
     head = engine.dag.get_head_sha()
     short_head = head[:7] if head else "none"
-    files = engine.scan_workspace_files()
+    commit = engine.dag.get_commit(head) if head else None
+    tracked_count = len(commit.manifest) if commit else 0
     return (
         f"[hermes-janus v1.0.0]\n"
         f"  Workspace: {engine.workspace_dir}\n"
         f"  Current Branch: {branch}\n"
         f"  HEAD: [{short_head}]\n"
-        f"  Tracked Files: {len(files)}"
+        f"  Tracked Files: {tracked_count}"
     )
 
 
@@ -200,11 +201,17 @@ Subcommands:
 def _handle_slash(raw_args: str) -> str:
     argv = raw_args.strip().split()
     if not argv or argv[0] in {"help", "-h", "--help"}:
+        print(_HELP)
         return _HELP
     handler = _COMMANDS.get(argv[0])
     if handler is None:
-        return f"Unknown subcommand: {argv[0]}\n\n{_HELP}"
-    return handler(argv)
+        msg = f"Unknown subcommand: {argv[0]}\n\n{_HELP}"
+        print(msg)
+        return msg
+    res = handler(argv)
+    if res:
+        print(res)
+    return res
 
 
 # -----------------------------------------------------------------------------

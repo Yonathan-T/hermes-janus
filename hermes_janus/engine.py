@@ -23,6 +23,7 @@ DEFAULT_IGNORE_DIRS = {
     ".janus",
     ".venv",
     "venv",
+    "vendor",
     "node_modules",
     "__pycache__",
     ".pytest_cache",
@@ -30,6 +31,14 @@ DEFAULT_IGNORE_DIRS = {
     ".vscode",
     "dist",
     "build",
+    "target",
+    "bin",
+    "obj",
+    "AppData",
+    ".cache",
+    ".npm",
+    ".cargo",
+    ".rustup",
 }
 
 DEFAULT_IGNORE_EXTENSIONS = {
@@ -61,8 +70,16 @@ class JanusEngine:
 
     def _should_ignore(self, path: Path) -> bool:
         """Filter out transient, virtualenv, and build artifacts."""
-        parts = set(path.parts)
-        if any(ignored in parts for ignored in DEFAULT_IGNORE_DIRS):
+        try:
+            rel = path.relative_to(self.workspace_dir)
+            rel_parts = set(rel.parts[:-1])
+        except Exception:
+            rel_parts = set()
+
+        if any(ignored in rel_parts for ignored in DEFAULT_IGNORE_DIRS):
+            return True
+        name_lower = path.name.lower()
+        if name_lower.startswith("ntuser") or name_lower.endswith((".dat", ".log", ".blf", ".regtrans-ms", ".ini")):
             return True
         if path.suffix in DEFAULT_IGNORE_EXTENSIONS:
             return True
@@ -80,7 +97,15 @@ class JanusEngine:
         if not self.workspace_dir.exists():
             return files
 
+        is_home_root = (self.workspace_dir == Path.home())
+
         for root, dirs, filenames in os.walk(self.workspace_dir):
+            # If the user launched directly in their home root (e.g. C:\Users\hp),
+            # do not deep-walk all personal folders (OneDrive, Downloads, AppData, etc.).
+            if is_home_root and Path(root) != self.workspace_dir:
+                dirs[:] = []
+                continue
+
             # Prune ignored directories in-place for fast traversal
             dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith(".")]
 
@@ -99,8 +124,11 @@ class JanusEngine:
 
         # Store each file into CAS
         for rel_path, abs_path in current_files.items():
-            blob_hash, _ = self.cas.put_file(abs_path)
-            manifest[rel_path] = blob_hash
+            try:
+                blob_hash, _ = self.cas.put_file(abs_path)
+                manifest[rel_path] = blob_hash
+            except (PermissionError, OSError):
+                continue
 
         # Commit into DAG
         commit = self.dag.save_commit(
