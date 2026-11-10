@@ -64,9 +64,28 @@ class JanusEngine:
         self.wal = WriteAheadLog(self.janus_dir / "wal")
         self.dag = MerkleDag(self.janus_dir / "dag")
 
+        self._ensure_gitignore()
+
         # Automatically create initial root snapshot if brand new
         if not self.dag.get_head_sha():
             self.snapshot(message="Initial repository state", author="system")
+
+    def _ensure_gitignore(self) -> None:
+        """Ensure .janus is added to the workspace's .gitignore to prevent accidental git commits."""
+        try:
+            gitignore_path = self.workspace_dir / ".gitignore"
+            if gitignore_path.exists():
+                content = gitignore_path.read_text(encoding="utf-8", errors="ignore")
+                lines = {line.strip() for line in content.splitlines()}
+                if ".janus" not in lines and ".janus/" not in lines:
+                    with open(gitignore_path, "a", encoding="utf-8") as f:
+                        if content and not content.endswith("\n"):
+                            f.write("\n")
+                        f.write("\n# Hermes Janus temporal engine\n.janus/\n")
+            elif (self.workspace_dir / ".git").is_dir():
+                gitignore_path.write_text("# Hermes Janus temporal engine\n.janus/\n", encoding="utf-8")
+        except Exception:
+            pass
 
     def _should_ignore(self, path: Path) -> bool:
         """Filter out transient, virtualenv, and build artifacts."""
