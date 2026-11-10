@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-janus"
+version = "1.0.0"
+description = "Bi-directional temporal state engine & MVCC workspace for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Nous Community" }
+]
+dependencies = []
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-janus = "hermes_janus"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hermes_janus"]
