@@ -15,15 +15,32 @@ from .engine import JanusEngine
 
 logger = logging.getLogger("hermes.plugins.janus")
 
-# Cache engine instances per workspace directory
 _engines: Dict[str, JanusEngine] = {}
 _active_workspace: Optional[Path] = None
 _active_tx_id: Optional[str] = None
 
+MUTATING_TOOLS = {
+    "write_file",
+    "edit_file",
+    "patch",
+    "replace_in_file",
+    "delete_file",
+    "terminal",
+    "execute_code",
+    "bash",
+}
+
+_SYSTEM_PROMPT = """## Janus Temporal State Engine & Safe Exploration Guidelines
+You have access to the Janus temporal state engine tools (`janus_*`) to safely explore hypotheses and self-correct:
+1. `janus_branch(branch_name)`: Fork the workspace to an isolated exploration branch BEFORE attempting speculative refactors, risky multi-file edits, or experimental bug fixes.
+2. `janus_checkpoint(message)`: Record a clean baseline restore point before executing complex transformations.
+3. `janus_rewind(steps=1)`: If your changes introduce errors, fail compilation, or fail tests (`go test`, `pytest`), call `janus_rewind(1)` immediately to cleanly restore the workspace to the prior clean state and attempt an alternative approach.
+4. `janus_merge(branch_name)`: Once your exploration branch passes all verification checks and tests, merge it back into the main branch.
+5. `janus_diff()`: Inspect the exact file delta between your current changes and the prior checkpoint.
+"""
+
 
 def _resolve_workspace() -> Path:
-    """Resolve the active workspace directory safely and dynamically."""
-    # 1. Hermes documented public API for agent/session working directory
     try:
         from agent.runtime_cwd import resolve_agent_cwd
         p = resolve_agent_cwd()
@@ -38,13 +55,11 @@ def _resolve_workspace() -> Path:
     except Exception:
         pass
 
-    # 2. Check environment variables passed by session / terminal
     for env_var in ("TERMINAL_CWD", "HERMES_WORKSPACE", "HERMES_SESSION_CWD"):
         val = os.environ.get(env_var)
         if val and Path(val).is_dir():
             return Path(val).resolve()
 
-    # 3. Fallback to process cwd
     cwd = Path.cwd().resolve()
     is_hermes_install = (
         cwd.name == "hermes-agent"
@@ -60,7 +75,6 @@ def _resolve_workspace() -> Path:
 
 
 def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
-    """Retrieve or initialize the JanusEngine for the target or active workspace."""
     global _active_workspace
     if target:
         target_path = Path(target).resolve()
@@ -76,24 +90,7 @@ def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
     return _engines[key]
 
 
-# -----------------------------------------------------------------------------
-# Lifecycle Hooks
-# -----------------------------------------------------------------------------
-
-MUTATING_TOOLS = {
-    "write_file",
-    "edit_file",
-    "patch",
-    "replace_in_file",
-    "delete_file",
-    "terminal",
-    "execute_code",
-    "bash",
-}
-
-
 def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> None:
-    """Intercept mutating actions to record WAL intent before disk modification."""
     global _active_tx_id
     if tool_name not in MUTATING_TOOLS:
         return
@@ -101,7 +98,6 @@ def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> No
     engine = get_engine()
     pre_state: Dict[str, Optional[str]] = {}
 
-    # Extract target path if explicit
     path_arg = args.get("path") or args.get("file")
     if isinstance(path_arg, str) and path_arg:
         full_path = (engine.workspace_dir / path_arg).resolve()
@@ -122,14 +118,12 @@ def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> No
 
 
 def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None, **kwargs: Any) -> None:
-    """Finalize WAL transaction and take snapshot if mutation occurred."""
     global _active_tx_id
     if tool_name not in MUTATING_TOOLS:
         return
 
     engine = get_engine()
     try:
-        # Determine informative target label from tool arguments
         target_info = ""
         target_path = args.get("path") or args.get("file") or args.get("filepath")
         if target_path and isinstance(target_path, str):
@@ -140,11 +134,8 @@ def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None,
                 cmd = cmd[:27] + "..."
             target_info = f" '{cmd}'"
 
-        commit_msg = f"auto: {tool_name}{target_info}"
-
-        # Commit snapshot of new state
         commit = engine.snapshot(
-            message=commit_msg,
+            message=f"auto: {tool_name}{target_info}",
             author="agent",
         )
         if _active_tx_id:
@@ -159,16 +150,11 @@ def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None,
 
 
 def _on_session_end(session_id: str = "", **kwargs: Any) -> None:
-    """Check for any orphaned or uncommitted transactions at session end."""
     engine = get_engine()
     pending = engine.wal.get_pending_transactions()
     if pending:
         logger.warning("[janus] Found %d uncommitted WAL transactions at session end.", len(pending))
 
-
-# -----------------------------------------------------------------------------
-# Slash Command Handlers (/janus ...)
-# -----------------------------------------------------------------------------
 
 def _cmd_timeline(argv: List[str]) -> str:
     engine = get_engine()
@@ -298,12 +284,7 @@ def _handle_slash(raw_args: str) -> str:
     return res
 
 
-# -----------------------------------------------------------------------------
-# Autonomous AI Tools
-# -----------------------------------------------------------------------------
-
 def tool_janus_checkpoint(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """Create a named checkpoint of the workspace."""
     args = args or {}
     message = args.get("message", "Agent checkpoint")
     engine = get_engine()
@@ -312,7 +293,6 @@ def tool_janus_checkpoint(args: Dict[str, Any] = None, **kwargs: Any) -> str:
 
 
 def tool_janus_rewind(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """Rewind workspace to previous state (steps back or commit sha)."""
     args = args or {}
     engine = get_engine()
     target = args.get("sha") or args.get("steps", 1)
@@ -323,7 +303,6 @@ def tool_janus_rewind(args: Dict[str, Any] = None, **kwargs: Any) -> str:
 
 
 def tool_janus_branch(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """Fork timeline to explore an alternative hypothesis or implementation."""
     args = args or {}
     branch_name = args.get("branch_name", "experiment")
     engine = get_engine()
@@ -332,19 +311,16 @@ def tool_janus_branch(args: Dict[str, Any] = None, **kwargs: Any) -> str:
 
 
 def tool_janus_timeline(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """Inspect timeline and past execution branches."""
     engine = get_engine()
     return engine.dag.render_timeline_ascii(limit=10)
 
 
 def tool_janus_diff(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """View file differences between current state and previous commit."""
     engine = get_engine()
     return engine.diff()
 
 
 def tool_janus_merge(args: Dict[str, Any] = None, **kwargs: Any) -> str:
-    """Merge successful branch back into current branch."""
     args = args or {}
     branch_name = args.get("branch_name", "")
     if not branch_name:
@@ -354,7 +330,6 @@ def tool_janus_merge(args: Dict[str, Any] = None, **kwargs: Any) -> str:
     return msg
 
 
-# Tool schemas conforming to standard Hermes function calling format
 _TOOL_DEFINITIONS = [
     (
         "janus_checkpoint",
@@ -443,22 +418,7 @@ _TOOL_DEFINITIONS = [
 ]
 
 
-# -----------------------------------------------------------------------------
-# Plugin Registration Entrypoint
-# -----------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = """## Janus Temporal State Engine & Safe Exploration Guidelines
-You have access to the Janus temporal state engine tools (`janus_*`) to safely explore hypotheses and self-correct:
-1. `janus_branch(branch_name)`: Fork the workspace to an isolated exploration branch BEFORE attempting speculative refactors, risky multi-file edits, or experimental bug fixes.
-2. `janus_checkpoint(message)`: Record a clean baseline restore point before executing complex transformations.
-3. `janus_rewind(steps=1)`: If your changes introduce errors, fail compilation, or fail tests (`go test`, `pytest`), call `janus_rewind(1)` immediately to cleanly restore the workspace to the prior clean state and attempt an alternative approach.
-4. `janus_merge(branch_name)`: Once your exploration branch passes all verification checks and tests, merge it back into the main branch.
-5. `janus_diff()`: Inspect the exact file delta between your current changes and the prior checkpoint.
-"""
-
-
 def register(ctx: Any) -> None:
-    """Register hooks, tools, and slash commands with Hermes Agent."""
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("on_session_end", _on_session_end)
