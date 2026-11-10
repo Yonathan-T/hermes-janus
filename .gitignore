@@ -8,3 +8,12 @@ dist/
 build/
 *.egg-info/
 demo_workspace/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+.env
+
