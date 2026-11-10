@@ -129,9 +129,22 @@ def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None,
 
     engine = get_engine()
     try:
+        # Determine informative target label from tool arguments
+        target_info = ""
+        target_path = args.get("path") or args.get("file") or args.get("filepath")
+        if target_path and isinstance(target_path, str):
+            target_info = f" {Path(target_path).name}"
+        elif "command" in args and isinstance(args.get("command"), str):
+            cmd = args["command"].strip().split("\n")[0]
+            if len(cmd) > 30:
+                cmd = cmd[:27] + "..."
+            target_info = f" '{cmd}'"
+
+        commit_msg = f"auto: {tool_name}{target_info}"
+
         # Commit snapshot of new state
         commit = engine.snapshot(
-            message=f"auto: after {tool_name}",
+            message=commit_msg,
             author="agent",
         )
         if _active_tx_id:
