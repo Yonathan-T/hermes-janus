@@ -400,11 +400,27 @@ _TOOL_DEFINITIONS = [
 # Plugin Registration Entrypoint
 # -----------------------------------------------------------------------------
 
+_SYSTEM_PROMPT = """## Janus Temporal State Engine & Safe Exploration Guidelines
+You have access to the Janus temporal state engine tools (`janus_*`) to safely explore hypotheses and self-correct:
+1. `janus_branch(branch_name)`: Fork the workspace to an isolated exploration branch BEFORE attempting speculative refactors, risky multi-file edits, or experimental bug fixes.
+2. `janus_checkpoint(message)`: Record a clean baseline restore point before executing complex transformations.
+3. `janus_rewind(steps=1)`: If your changes introduce errors, fail compilation, or fail tests (`go test`, `pytest`), call `janus_rewind(1)` immediately to cleanly restore the workspace to the prior clean state and attempt an alternative approach.
+4. `janus_merge(branch_name)`: Once your exploration branch passes all verification checks and tests, merge it back into the main branch.
+5. `janus_diff()`: Inspect the exact file delta between your current changes and the prior checkpoint.
+"""
+
+
 def register(ctx: Any) -> None:
     """Register hooks, tools, and slash commands with Hermes Agent."""
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("on_session_end", _on_session_end)
+
+    if hasattr(ctx, "register_system_prompt_section"):
+        ctx.register_system_prompt_section(
+            id="hermes-janus",
+            content=_SYSTEM_PROMPT,
+        )
 
     ctx.register_command(
         "janus",
