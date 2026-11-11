@@ -11,6 +11,7 @@ import difflib
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -420,10 +421,18 @@ class JanusEngine:
                 continue
 
             if test_command:
+                cmd = test_command.strip()
+                if (cmd.startswith('"') and cmd.endswith('"')) or (cmd.startswith("'") and cmd.endswith("'")):
+                    cmd = cmd[1:-1].strip()
+
+                parts = cmd.split(maxsplit=1)
+                if parts and parts[0] in ("python", "python3") and not shutil.which(parts[0]):
+                    cmd = f'"{sys.executable}" {parts[1]}' if len(parts) > 1 else f'"{sys.executable}"'
+
                 start = time.time()
                 try:
                     proc = subprocess.run(
-                        test_command,
+                        cmd,
                         shell=True,
                         cwd=str(self.workspace_dir),
                         capture_output=True,

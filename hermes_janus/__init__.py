@@ -270,7 +270,9 @@ def _cmd_elect(argv: List[str]) -> str:
     idx = 1
     while idx < len(argv):
         if argv[idx] in ("--test", "-t") and idx + 1 < len(argv):
-            test_cmd = " ".join(argv[idx + 1:])
+            test_cmd = " ".join(argv[idx + 1:]).strip()
+            if (test_cmd.startswith('"') and test_cmd.endswith('"')) or (test_cmd.startswith("'") and test_cmd.endswith("'")):
+                test_cmd = test_cmd[1:-1].strip()
             break
         branches.append(argv[idx])
         idx += 1
