@@ -150,6 +150,8 @@ class MerkleDag:
             stats=stats,
         )
 
+        self.commits_dir.mkdir(parents=True, exist_ok=True)
+        self.branches_dir.mkdir(parents=True, exist_ok=True)
         commit_file = self.commits_dir / f"{sha}.json"
         commit_file.write_text(commit.to_json(), encoding="utf-8")
 

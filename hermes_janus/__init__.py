@@ -85,6 +85,9 @@ def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
         target_path = _resolve_workspace()
 
     key = str(target_path)
+    if key in _engines:
+        if not _engines[key].janus_dir.exists():
+            del _engines[key]
     if key not in _engines:
         _engines[key] = JanusEngine(target_path)
     return _engines[key]

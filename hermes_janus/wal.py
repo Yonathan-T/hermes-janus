@@ -48,6 +48,7 @@ class WriteAheadLog:
             self.wal_file.touch()
 
     def _append(self, entry: WalEntry) -> None:
+        self.root_dir.mkdir(parents=True, exist_ok=True)
         with open(self.wal_file, "a", encoding="utf-8") as f:
             f.write(entry.to_json() + "\n")
 
