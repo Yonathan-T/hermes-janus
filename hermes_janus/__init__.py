@@ -41,6 +41,20 @@ You have access to the Janus temporal state engine tools (`janus_*`) to safely e
 
 
 def _resolve_workspace() -> Path:
+    val = os.environ.get("HERMES_WORKSPACE")
+    if val and Path(val).is_dir():
+        return Path(val).resolve()
+
+    for candidate_dir in (Path(os.environ.get("LOCALAPPDATA", "")) / "hermes", Path.home() / ".hermes"):
+        marker = candidate_dir / "janus_workspace"
+        if marker.exists():
+            try:
+                saved = marker.read_text(encoding="utf-8").strip()
+                if saved and Path(saved).is_dir():
+                    return Path(saved).resolve()
+            except Exception:
+                pass
+
     try:
         from agent.runtime_cwd import resolve_agent_cwd
         p = resolve_agent_cwd()
@@ -79,8 +93,6 @@ def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
     if target:
         target_path = Path(target).resolve()
         _active_workspace = target_path
-    elif _active_workspace is not None:
-        target_path = _active_workspace
     else:
         target_path = _resolve_workspace()
 
@@ -220,6 +232,12 @@ def _cmd_workspace(argv: List[str]) -> str:
         if not target.is_dir():
             return f"[janus] Error: Path '{target}' is not a directory."
         _active_workspace = target
+        try:
+            marker = Path.home() / ".hermes" / "janus_workspace"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(target), encoding="utf-8")
+        except Exception:
+            pass
         engine = get_engine(target)
         head = engine.dag.get_head_sha()
         commit = engine.dag.get_commit(head) if head else None
