@@ -93,6 +93,18 @@ Hermes can autonomously invoke Janus tools via function calling:
 | `janus_elect` | `candidates` (list), `test_command` (str) | Runs tournament election across branches and auto-merges the winner. |
 | `janus_gc` | None | Purges unreferenced blobs and stale commits to maintain minimal disk overhead. |
 
+## Workspace State, Privacy & Storage
+
+To deliver instant atomic rollbacks without external daemons or cloud dependencies, Janus stores state locally within the active workspace:
+
+1. **Local `.janus/` Directory:** Janus maintains a hidden `.janus/` folder in the root of the active workspace containing:
+   - **Content-Addressable Storage (`.janus/store/`):** Immutable SHA-256 blobs of workspace files. When a snapshot is taken, full copies of tracked workspace files—**including `.env` or sensitive configuration files if present in the workspace**—are saved locally to guarantee exact bit-for-bit restore capability.
+   - **Write-Ahead Log (`.janus/wal/`):** An append-only WAL (`wal.log`) that records mutating tool calls (`write_file`, `edit_file`, `terminal`, etc.) along with the tool arguments and pre-mutation hashes.
+   - **Merkle DAG Commits (`.janus/dag/`):** JSON metadata files tracking commit history, branch pointers, and vector clocks.
+2. **Automatic `.gitignore` Protection:** On initialization, Janus appends `.janus/` to the workspace `.gitignore` to ensure internal snapshots and WAL logs are never committed to your upstream Git repository.
+3. **Preservation of Untracked Files:** On `/janus rewind` or branch checkout, Janus only restores and unlinks files that were previously tracked in Janus snapshots. Untracked user files are strictly preserved and never deleted.
+4. **Local Data Isolation:** All snapshots, WAL logs, and CAS objects reside strictly on local disk; Janus never transmits workspace data or telemetry externally.
+
 ## Install
 
 From the Nous plugin catalog:

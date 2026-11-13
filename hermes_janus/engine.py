@@ -8,7 +8,9 @@ and speculative execution branching.
 from __future__ import annotations
 
 import difflib
+import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,8 +19,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .cas import ContentAddressableStorage
-from .dag import JanusCommit, MerkleDag
+from .dag import JanusCommit, MerkleDag, validate_branch_name, validate_sha
 from .wal import WriteAheadLog
+
+logger = logging.getLogger("hermes.plugins.janus.engine")
+
+MAX_SCAN_FILES = 5000
 
 
 DEFAULT_IGNORE_DIRS = {
@@ -90,6 +96,14 @@ class JanusEngine:
         except Exception:
             pass
 
+    def _is_safe_workspace_target(self, rel_path: str | Path) -> bool:
+        """Verify that rel_path resolves strictly within workspace_dir to prevent path traversal."""
+        try:
+            target = (self.workspace_dir / rel_path).resolve()
+            return target.is_relative_to(self.workspace_dir) and target != self.workspace_dir
+        except (ValueError, RuntimeError):
+            return False
+
     def _should_ignore(self, path: Path) -> bool:
         """Filter out transient, virtualenv, and build artifacts."""
         try:
@@ -114,7 +128,7 @@ class JanusEngine:
         return False
 
     def scan_workspace_files(self) -> Dict[str, Path]:
-        """Scan workspace and return relative_path -> absolute_path mapping."""
+        """Scan workspace and return relative_path -> absolute_path mapping, bounded by MAX_SCAN_FILES."""
         files: Dict[str, Path] = {}
         if not self.workspace_dir.exists():
             return files
@@ -122,6 +136,13 @@ class JanusEngine:
         is_home_root = (self.workspace_dir == Path.home())
 
         for root, dirs, filenames in os.walk(self.workspace_dir):
+            if len(files) >= MAX_SCAN_FILES:
+                logger.warning(
+                    "[janus] Workspace file scan reached cap of %d files. Further files were skipped.",
+                    MAX_SCAN_FILES,
+                )
+                break
+
             # If the user launched directly in their home root (e.g. C:\Users\hp),
             # do not deep-walk all personal folders (OneDrive, Downloads, AppData, etc.).
             if is_home_root and Path(root) != self.workspace_dir:
@@ -135,7 +156,10 @@ class JanusEngine:
                 file_path = Path(root) / filename
                 if not self._should_ignore(file_path):
                     rel_path = file_path.relative_to(self.workspace_dir).as_posix()
-                    files[rel_path] = file_path
+                    if self._is_safe_workspace_target(rel_path):
+                        files[rel_path] = file_path
+                        if len(files) >= MAX_SCAN_FILES:
+                            break
 
         return files
 
@@ -185,7 +209,11 @@ class JanusEngine:
             else:
                 target_commit = history[target]
         else:
-            target_commit = self.dag.get_commit(str(target))
+            try:
+                target_clean = validate_sha(str(target).strip())
+                target_commit = self.dag.get_commit(target_clean)
+            except ValueError as e:
+                return False, str(e)
 
         if not target_commit:
             return False, f"Target commit '{target}' not found in DAG."
@@ -197,11 +225,15 @@ class JanusEngine:
         # Apply snapshot manifest back to workspace
         target_manifest = target_commit.manifest
         current_files = self.scan_workspace_files()
+        all_tracked = self.dag.get_all_tracked_filepaths()
 
-        # 1. Delete files present now but absent in target snapshot
+        # 1. Delete files present now that were previously tracked by Janus but absent in target snapshot.
+        # Untracked user files are strictly preserved and never unlinked.
         deleted_count = 0
         for rel_path, abs_path in current_files.items():
-            if rel_path not in target_manifest:
+            if not self._is_safe_workspace_target(rel_path):
+                continue
+            if rel_path in all_tracked and rel_path not in target_manifest:
                 try:
                     abs_path.unlink(missing_ok=True)
                     deleted_count += 1
@@ -211,6 +243,8 @@ class JanusEngine:
         # 2. Restore files from CAS
         restored_count = 0
         for rel_path, blob_hash in target_manifest.items():
+            if not self._is_safe_workspace_target(rel_path):
+                continue
             dest_path = self.workspace_dir / rel_path
             current_hash = self.cas.hash_file(dest_path) if dest_path.exists() else None
             if current_hash != blob_hash:
@@ -236,7 +270,11 @@ class JanusEngine:
 
     def branch(self, branch_name: str) -> Tuple[bool, str]:
         """Create or switch to a branch."""
-        clean_name = branch_name.strip().replace(" ", "-")
+        try:
+            clean_name = validate_branch_name(branch_name.strip().replace(" ", "-"))
+        except ValueError as e:
+            return False, str(e)
+
         head_sha = self.dag.get_head_sha()
         if not head_sha:
             return False, "Cannot branch from an empty timeline."
@@ -289,6 +327,11 @@ class JanusEngine:
 
     def merge(self, source_branch: str) -> Tuple[bool, str]:
         """Perform a three-way merge from source_branch into current branch."""
+        try:
+            source_branch = validate_branch_name(source_branch.strip())
+        except ValueError as e:
+            return False, str(e)
+
         current_branch = self.dag.get_current_branch()
         if current_branch == source_branch:
             return False, f"Cannot merge branch '{source_branch}' into itself."
@@ -346,8 +389,10 @@ class JanusEngine:
         if conflicts:
             return False, f"Merge conflicts detected in: {', '.join(conflicts)}. Manual resolution required."
 
-        # Apply merged manifest to workspace
+        # Apply merged manifest to workspace safely
         for k, blob_hash in merged_manifest.items():
+            if not self._is_safe_workspace_target(k):
+                continue
             dest = self.workspace_dir / k
             self.cas.restore_file(blob_hash, dest)
 
@@ -410,9 +455,13 @@ class JanusEngine:
         winner: Optional[str] = None
         best_duration: float = float("inf")
 
-        for branch in candidate_branches:
-            branch = branch.strip()
-            if not branch:
+        for raw_branch in candidate_branches:
+            if not raw_branch or not isinstance(raw_branch, str):
+                continue
+            try:
+                branch = validate_branch_name(raw_branch.strip())
+            except ValueError as e:
+                results[raw_branch] = {"passed": False, "duration": 0.0, "output": f"Invalid branch name: {e}"}
                 continue
 
             success, msg = self.branch(branch)
@@ -421,19 +470,44 @@ class JanusEngine:
                 continue
 
             if test_command:
-                cmd = test_command.strip()
-                if (cmd.startswith('"') and cmd.endswith('"')) or (cmd.startswith("'") and cmd.endswith("'")):
-                    cmd = cmd[1:-1].strip()
-
-                parts = cmd.split(maxsplit=1)
-                if parts and parts[0] in ("python", "python3") and not shutil.which(parts[0]):
-                    cmd = f'"{sys.executable}" {parts[1]}' if len(parts) > 1 else f'"{sys.executable}"'
-
                 start = time.time()
                 try:
+                    cmd_str = test_command.strip()
+                    if sys.platform == "win32":
+                        raw_tokens = shlex.split(cmd_str, posix=False)
+                        argv = [t.strip('"\'') for t in raw_tokens if t.strip()]
+                    else:
+                        argv = shlex.split(cmd_str, posix=True)
+
+                    if not argv:
+                        raise ValueError("Empty test command after parsing")
+
+                    if argv[0].lower() in ("python", "python3") and not shutil.which(argv[0]):
+                        argv[0] = sys.executable
+
+                    safe_env: Dict[str, str] = {}
+                    env_whitelist = (
+                        "PATH",
+                        "HOME",
+                        "LANG",
+                        "LC_ALL",
+                        "SYSTEMROOT",
+                        "SYSTEMDRIVE",
+                        "COMSPEC",
+                        "USERPROFILE",
+                        "TEMP",
+                        "TMP",
+                        "PYTHONPATH",
+                    )
+                    for k in env_whitelist:
+                        val = os.environ.get(k)
+                        if val is not None:
+                            safe_env[k] = val
+
                     proc = subprocess.run(
-                        cmd,
-                        shell=True,
+                        argv,
+                        shell=False,
+                        env=safe_env,
                         cwd=str(self.workspace_dir),
                         capture_output=True,
                         text=True,

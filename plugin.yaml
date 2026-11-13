@@ -1,8 +1,8 @@
 name: hermes-janus
 version: 1.0.0
 description: "Bi-directional temporal state engine & MVCC workspace for Hermes Agent. Provides zero-copy Content-Addressable Storage, Write-Ahead Logging (WAL), Merkle-DAG execution branching, and instant atomic rollback."
-author: "Nous Community"
-homepage: "https://github.com/NousResearch/hermes-agent"
+author: "Yonathan-T"
+homepage: "https://github.com/Yonathan-T/hermes-janus"
 provides_hooks:
   - pre_tool_call
   - post_tool_call

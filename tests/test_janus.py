@@ -131,6 +131,58 @@ class TestJanus(unittest.TestCase):
         self.assertTrue(res["merged"])
         self.assertIn("return a + b", test_file.read_text())
 
+    def test_untracked_files_preserved_on_rewind(self):
+        """Untracked user files must never be unlinked during rewind or branch switch."""
+        engine = JanusEngine(self.temp_dir)
+        tracked_file = self.temp_dir / "tracked.txt"
+        tracked_file.write_text("v1")
+        engine.snapshot("commit 1")
+
+        tracked_file.write_text("v2")
+        engine.snapshot("commit 2")
+
+        # Create an untracked user file that Janus has never seen in any commit
+        untracked_file = self.temp_dir / "user_notes.txt"
+        untracked_file.write_text("important user notes")
+
+        # Rewind to commit 1
+        success, msg = engine.rewind(1)
+        self.assertTrue(success)
+        self.assertEqual(tracked_file.read_text(), "v1")
+        # Verify untracked user file is completely intact
+        self.assertTrue(untracked_file.exists())
+        self.assertEqual(untracked_file.read_text(), "important user notes")
+
+    def test_branch_and_sha_validation(self):
+        """Branch names and commit SHAs must be strictly validated against path traversal."""
+        from hermes_janus.dag import validate_branch_name, validate_sha
+
+        # Valid branch names
+        self.assertEqual(validate_branch_name("feature-1"), "feature-1")
+        self.assertEqual(validate_branch_name("fix_bug.2"), "fix_bug.2")
+
+        # Invalid branch names
+        for bad in ("../evil", "..", "foo/bar", "branch name with spaces", "", "$invalid"):
+            with self.assertRaises(ValueError):
+                validate_branch_name(bad)
+
+        # Valid SHAs
+        self.assertEqual(validate_sha("abcd"), "abcd")
+        self.assertEqual(validate_sha("a1b2c3d4e5f6"), "a1b2c3d4e5f6")
+
+        # Invalid SHAs
+        for bad in ("../evil", "12", "xyz123", "a1b2!", ""):
+            with self.assertRaises(ValueError):
+                validate_sha(bad)
+
+    def test_path_traversal_safety(self):
+        """Engine must refuse any targets outside the workspace directory."""
+        engine = JanusEngine(self.temp_dir)
+        self.assertFalse(engine._is_safe_workspace_target("../outside.txt"))
+        self.assertFalse(engine._is_safe_workspace_target("../../etc/passwd"))
+        self.assertTrue(engine._is_safe_workspace_target("subdir/nested.txt"))
+        self.assertTrue(engine._is_safe_workspace_target("valid_file.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

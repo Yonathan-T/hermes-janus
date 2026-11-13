@@ -6,6 +6,7 @@ and Merkle-DAG branching for atomic workspace rollbacks and hypothesis explorati
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 from pathlib import Path
@@ -17,7 +18,9 @@ logger = logging.getLogger("hermes.plugins.janus")
 
 _engines: Dict[str, JanusEngine] = {}
 _active_workspace: Optional[Path] = None
-_active_tx_id: Optional[str] = None
+_active_tx_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "janus_active_tx_id", default=None
+)
 
 MUTATING_TOOLS = {
     "write_file",
@@ -40,20 +43,32 @@ You have access to the Janus temporal state engine tools (`janus_*`) to safely e
 """
 
 
+def _get_janus_plugin_data_dir() -> Path:
+    """Resolve the profile-scoped plugin data directory: get_hermes_home() / 'plugin-data' / 'hermes-janus'."""
+    try:
+        from hermes_constants import get_hermes_home
+        base = get_hermes_home()
+    except ImportError:
+        val = os.environ.get("LOCALAPPDATA")
+        base = (Path(val) / "hermes") if val else (Path.home() / ".hermes")
+    target = base / "plugin-data" / "hermes-janus"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def _resolve_workspace() -> Path:
     val = os.environ.get("HERMES_WORKSPACE")
     if val and Path(val).is_dir():
         return Path(val).resolve()
 
-    for candidate_dir in (Path(os.environ.get("LOCALAPPDATA", "")) / "hermes", Path.home() / ".hermes"):
-        marker = candidate_dir / "janus_workspace"
+    try:
+        marker = _get_janus_plugin_data_dir() / "workspace"
         if marker.exists():
-            try:
-                saved = marker.read_text(encoding="utf-8").strip()
-                if saved and Path(saved).is_dir():
-                    return Path(saved).resolve()
-            except Exception:
-                pass
+            saved = marker.read_text(encoding="utf-8").strip()
+            if saved and Path(saved).is_dir():
+                return Path(saved).resolve()
+    except Exception:
+        pass
 
     try:
         from agent.runtime_cwd import resolve_agent_cwd
@@ -105,10 +120,19 @@ def get_engine(target: Optional[str | Path] = None) -> JanusEngine:
     return _engines[key]
 
 
-def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> None:
-    global _active_tx_id
+def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> Optional[Dict[str, Any]]:
+    # Security approval gate for janus_elect tournament tests
+    if tool_name == "janus_elect":
+        test_cmd = args.get("test_command")
+        if test_cmd and str(test_cmd).strip():
+            return {
+                "action": "approve",
+                "message": f"Janus tournament election will execute test: {str(test_cmd).strip()}",
+                "rule_key": "janus_elect",
+            }
+
     if tool_name not in MUTATING_TOOLS:
-        return
+        return None
 
     engine = get_engine()
     pre_state: Dict[str, Optional[str]] = {}
@@ -124,20 +148,22 @@ def _on_pre_tool_call(tool_name: str, args: Dict[str, Any], **kwargs: Any) -> No
         else:
             pre_state[path_arg] = None
 
-    _active_tx_id = engine.wal.prepare(
+    tx_id = engine.wal.prepare(
         tool_name=tool_name,
         tool_args=args,
         pre_state_blobs=pre_state,
     )
-    logger.debug("[janus] WAL PREPARED tx_id=%s tool=%s", _active_tx_id, tool_name)
+    _active_tx_id.set(tx_id)
+    logger.debug("[janus] WAL PREPARED tx_id=%s tool=%s", tx_id, tool_name)
+    return None
 
 
 def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None, **kwargs: Any) -> None:
-    global _active_tx_id
     if tool_name not in MUTATING_TOOLS:
         return
 
     engine = get_engine()
+    tx_id = _active_tx_id.get()
     try:
         target_info = ""
         target_path = args.get("path") or args.get("file") or args.get("filepath")
@@ -153,15 +179,15 @@ def _on_post_tool_call(tool_name: str, args: Dict[str, Any], result: Any = None,
             message=f"auto: {tool_name}{target_info}",
             author="agent",
         )
-        if _active_tx_id:
-            engine.wal.commit(_active_tx_id, commit_sha=commit.sha)
-            logger.debug("[janus] WAL COMMITTED tx_id=%s commit=%s", _active_tx_id, commit.sha[:7])
+        if tx_id:
+            engine.wal.commit(tx_id, commit_sha=commit.sha)
+            logger.debug("[janus] WAL COMMITTED tx_id=%s commit=%s", tx_id, commit.sha[:7])
     except Exception as e:
         logger.error("[janus] Error during post_tool_call: %s", e)
-        if _active_tx_id:
-            engine.wal.abort(_active_tx_id, error=str(e))
+        if tx_id:
+            engine.wal.abort(tx_id, error=str(e))
     finally:
-        _active_tx_id = None
+        _active_tx_id.set(None)
 
 
 def _on_session_end(session_id: str = "", **kwargs: Any) -> None:
@@ -233,8 +259,7 @@ def _cmd_workspace(argv: List[str]) -> str:
             return f"[janus] Error: Path '{target}' is not a directory."
         _active_workspace = target
         try:
-            marker = Path.home() / ".hermes" / "janus_workspace"
-            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker = _get_janus_plugin_data_dir() / "workspace"
             marker.write_text(str(target), encoding="utf-8")
         except Exception:
             pass

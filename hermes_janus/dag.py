@@ -9,10 +9,38 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{4,64}$")
+
+
+def validate_branch_name(branch_name: str) -> str:
+    """Validate branch name to prevent path traversal and ensure safe filesystem characters."""
+    if not branch_name or not isinstance(branch_name, str):
+        raise ValueError("Invalid branch name: must be a non-empty string.")
+    clean = branch_name.strip()
+    if ".." in clean or not BRANCH_PATTERN.match(clean):
+        raise ValueError(
+            f"Invalid branch name '{branch_name}': must match ^[A-Za-z0-9._-]{{1,64}}$ and cannot contain '..'"
+        )
+    return clean
+
+
+def validate_sha(sha: str) -> str:
+    """Validate commit SHA or prefix format to prevent path traversal."""
+    if not sha or not isinstance(sha, str):
+        raise ValueError("Invalid commit SHA: must be a non-empty string.")
+    clean = sha.strip()
+    if not SHA_PATTERN.match(clean):
+        raise ValueError(
+            f"Invalid commit SHA '{sha}': must match ^[0-9a-f]{{4,64}}$"
+        )
+    return clean.lower()
 
 
 @dataclass
@@ -74,19 +102,26 @@ class MerkleDag:
         return head if head else None
 
     def get_branch_sha(self, branch_name: str) -> Optional[str]:
-        branch_file = self.branches_dir / branch_name
+        try:
+            clean_name = validate_branch_name(branch_name)
+        except ValueError:
+            return None
+        branch_file = self.branches_dir / clean_name
         if branch_file.exists():
             sha = branch_file.read_text(encoding="utf-8").strip()
             return sha if sha else None
         return None
 
     def set_branch_sha(self, branch_name: str, sha: str) -> None:
-        branch_file = self.branches_dir / branch_name
+        clean_name = validate_branch_name(branch_name)
+        clean_sha = validate_sha(sha)
+        branch_file = self.branches_dir / clean_name
         branch_file.parent.mkdir(parents=True, exist_ok=True)
-        branch_file.write_text(sha, encoding="utf-8")
+        branch_file.write_text(clean_sha, encoding="utf-8")
 
     def switch_branch(self, branch_name: str) -> None:
-        self._write_head(f"ref: refs/heads/{branch_name}")
+        clean_name = validate_branch_name(branch_name)
+        self._write_head(f"ref: refs/heads/{clean_name}")
 
     def list_branches(self) -> List[str]:
         if not self.branches_dir.exists():
@@ -167,7 +202,11 @@ class MerkleDag:
         """Look up a commit by full SHA or short prefix (minimum 4 chars)."""
         if not sha_or_prefix:
             return None
-        sha_clean = sha_or_prefix.strip().lower()
+        try:
+            sha_clean = validate_sha(sha_or_prefix)
+        except ValueError:
+            return None
+
         exact_file = self.commits_dir / f"{sha_clean}.json"
         if exact_file.exists():
             return JanusCommit.from_json(exact_file.read_text(encoding="utf-8"))
@@ -235,6 +274,17 @@ class MerkleDag:
             except Exception:
                 pass
         return referenced
+
+    def get_all_tracked_filepaths(self) -> Set[str]:
+        """Collect relative file paths referenced in any commit manifest."""
+        tracked: Set[str] = set()
+        for commit_file in self.commits_dir.glob("*.json"):
+            try:
+                commit = JanusCommit.from_json(commit_file.read_text(encoding="utf-8"))
+                tracked.update(commit.manifest.keys())
+            except Exception:
+                pass
+        return tracked
 
     def prune_old_commits(self, max_history: int = 50) -> int:
         """Prune commits older than max_history per branch line."""

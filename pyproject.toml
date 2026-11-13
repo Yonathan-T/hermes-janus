@@ -10,8 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Nous Community" }
+    { name = "Yonathan-T" }
 ]
+urls = { Homepage = "https://github.com/Yonathan-T/hermes-janus" }
 dependencies = []
 
 [project.entry-points."hermes_agent.plugins"]
